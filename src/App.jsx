@@ -11,31 +11,55 @@ const dateTimeLocalToEpoch = (dateTimeStr) => Math.floor(new Date(dateTimeStr).g
 export default function App() {
   const [config, setConfig] = useState(null);
   const [isConnected, setIsConnected] = useState(false);
-  const [activeTab, setActiveTab] = useState('dashboard'); 
+  const [activeTab, setActiveTab] = useState('dashboard');
   const [mediaFiles, setMediaFiles] = useState([]);
   const [isUploading, setIsUploading] = useState(false);
   const [editingApp, setEditingApp] = useState(null);
 
   const ws = useRef(null);
+  const pendingRequests = useRef({});
+  const nextId = useRef(1);
   const HOST = window.location.hostname === 'localhost' ? '127.0.0.1' : window.location.hostname;
-  const API_BASE = `http://${HOST}:5000`; 
+  const API_BASE = `http://${HOST}:5000`;
   const WS_URL = `ws://${HOST}:5000/ws`;
 
   useEffect(() => {
     connectWebSocket();
-    fetchMedia();
     return () => ws.current?.close();
   }, []);
 
   const connectWebSocket = () => {
     ws.current = new WebSocket(WS_URL);
-    ws.current.onopen = () => { setIsConnected(true); sendCommand('getConfig'); };
+    ws.current.onopen = () => {
+      setIsConnected(true);
+      // Subscribe to topics
+      request('subscribe', { topic: 'configuration' });
+      request('subscribe', { topic: 'media' });
+      // Fetch initial state
+      request('getConfig', {}, (result) => updateLocalState(result));
+      request('getMedia', {}, (result) => setMediaFiles(result.files || []));
+    };
     ws.current.onmessage = (e) => {
       const data = JSON.parse(e.data);
-      if (data.result?.version) updateLocalState(data.result);
-      if (data.method === 'stateChanged') updateLocalState(data.params);
+      if (data.type === 'response' && data.id) {
+        // Correlated response — invoke pending callback
+        const callback = pendingRequests.current[data.id];
+        if (callback) {
+          delete pendingRequests.current[data.id];
+          if (data.result) callback(data.result);
+          else if (data.error) console.error('Request error:', data.error.message);
+        }
+      } else if (data.type === 'publish') {
+        // Topic-based publish from server
+        if (data.topic === 'configuration') updateLocalState(data.params);
+        if (data.topic === 'media') setMediaFiles(data.params?.files || []);
+      }
     };
-    ws.current.onclose = () => { setIsConnected(false); setTimeout(connectWebSocket, 3000); };
+    ws.current.onclose = () => {
+      setIsConnected(false);
+      pendingRequests.current = {};
+      setTimeout(connectWebSocket, 3000);
+    };
   };
 
   const updateLocalState = (conf) => {
@@ -43,18 +67,17 @@ export default function App() {
     if (editingApp) setEditingApp(conf.applications.find(a => a.id === editingApp.id) || null);
   };
 
-  const sendCommand = (method, params = {}) => {
+  /** Send a request and optionally handle the response via callback */
+  const request = (method, params = {}, onResult = null) => {
     if (ws.current?.readyState === WebSocket.OPEN) {
-      ws.current.send(JSON.stringify({ jsonrpc: "2.0", method, params, id: Date.now() }));
+      const id = String(nextId.current++);
+      if (onResult) pendingRequests.current[id] = onResult;
+      ws.current.send(JSON.stringify({ jsonrpc: "2.0", type: "request", method, params, id }));
     }
   };
 
-  const fetchMedia = async () => {
-    try {
-      const res = await fetch(`${API_BASE}/api/media`);
-      if (res.ok) setMediaFiles(await res.json());
-    } catch (e) { console.error(e); }
-  };
+  /** Fire-and-forget convenience — same as request without callback */
+  const sendCommand = (method, params = {}) => request(method, params);
 
   const handleFileUpload = async (e) => {
     const file = e.target.files[0];
@@ -63,8 +86,7 @@ export default function App() {
     const formData = new FormData();
     formData.append("file", file);
     try {
-      if ((await fetch(`${API_BASE}/api/media`, { method: "POST", body: formData })).ok) 
-        setTimeout(fetchMedia, 500);
+      await fetch(`${API_BASE}/api/media`, { method: "POST", body: formData });
     } catch (err) { alert("Upload error"); }
     setIsUploading(false);
     e.target.value = null;
@@ -99,13 +121,13 @@ export default function App() {
           <div className="bg-gray-900 border border-gray-800 rounded-3xl p-6 space-y-5">
             <div>
               <label className="block text-[10px] font-black text-gray-500 uppercase mb-1">Name</label>
-              <input type="text" value={editingApp.name} onChange={(e) => setEditingApp({...editingApp, name: e.target.value})} className="w-full bg-gray-800 rounded-xl px-4 py-2 border border-gray-700 outline-none focus:ring-1 ring-blue-500" />
+              <input type="text" value={editingApp.name} onChange={(e) => setEditingApp({ ...editingApp, name: e.target.value })} className="w-full bg-gray-800 rounded-xl px-4 py-2 border border-gray-700 outline-none focus:ring-1 ring-blue-500" />
             </div>
 
             <div className="grid grid-cols-2 gap-4">
               <div>
                 <label className="block text-[10px] font-black text-gray-500 uppercase mb-1">Logic</label>
-                <select value={editingApp.type} onChange={(e) => setEditingApp({...editingApp, type: e.target.value})} className="w-full bg-gray-800 rounded-xl px-3 py-2 border border-gray-700 text-xs font-bold uppercase">
+                <select value={editingApp.type} onChange={(e) => setEditingApp({ ...editingApp, type: e.target.value })} className="w-full bg-gray-800 rounded-xl px-3 py-2 border border-gray-700 text-xs font-bold uppercase">
                   <option value="clock">Clock</option>
                   <option value="time-elapsed">Elapsed</option>
                   <option value="countdown">Countdown</option>
@@ -113,7 +135,7 @@ export default function App() {
               </div>
               <div>
                 <label className="block text-[10px] font-black text-gray-500 uppercase mb-1">Watchface</label>
-                <select value={editingApp.watchface} onChange={(e) => setEditingApp({...editingApp, watchface: e.target.value})} className="w-full bg-gray-800 rounded-xl px-3 py-2 border border-gray-700 text-xs font-bold uppercase">
+                <select value={editingApp.watchface} onChange={(e) => setEditingApp({ ...editingApp, watchface: e.target.value })} className="w-full bg-gray-800 rounded-xl px-3 py-2 border border-gray-700 text-xs font-bold uppercase">
                   <option value="clock">Analog</option>
                   <option value="seven-segment">Digital</option>
                   <option value="round-progress-bar">Progress</option>
@@ -124,13 +146,13 @@ export default function App() {
             {editingApp.type !== 'clock' && (
               <div>
                 <label className="block text-[10px] font-black text-gray-500 uppercase mb-1">Target Date/Time</label>
-                <input type="datetime-local" value={epochToDateTimeLocal(editingApp.timestamp)} onChange={(e) => setEditingApp({...editingApp, timestamp: dateTimeLocalToEpoch(e.target.value)})} className="w-full bg-gray-800 rounded-xl px-4 py-2 border border-gray-700 [color-scheme:dark] text-xs" />
+                <input type="datetime-local" value={epochToDateTimeLocal(editingApp.timestamp)} onChange={(e) => setEditingApp({ ...editingApp, timestamp: dateTimeLocalToEpoch(e.target.value), initialized: true })} className="w-full bg-gray-800 rounded-xl px-4 py-2 border border-gray-700 [color-scheme:dark] text-xs" />
               </div>
             )}
 
             <div>
               <label className="block text-[10px] font-black text-gray-500 uppercase mb-1">Background Asset</label>
-              <select value={editingApp.background || ''} onChange={(e) => setEditingApp({...editingApp, background: e.target.value})} className="w-full bg-gray-800 rounded-xl px-4 py-2 border border-gray-700 text-xs font-bold uppercase">
+              <select value={editingApp.background || ''} onChange={(e) => setEditingApp({ ...editingApp, background: e.target.value })} className="w-full bg-gray-800 rounded-xl px-4 py-2 border border-gray-700 text-xs font-bold uppercase">
                 <option value="">None</option>
                 {mediaFiles.map(f => <option key={f} value={f}>{f}</option>)}
               </select>
@@ -139,11 +161,11 @@ export default function App() {
             <div className="flex space-x-4 pt-2">
               <div className="flex-1 text-center">
                 <label className="block text-[10px] font-black text-gray-500 uppercase mb-2">Base Color</label>
-                <input type="color" value={editingApp['base-color'] || '#000000'} onChange={(e) => setEditingApp({...editingApp, 'base-color': e.target.value})} className="w-12 h-12 rounded-full cursor-pointer bg-transparent border-0 mx-auto block shadow-lg" />
+                <input type="color" value={editingApp['base-color'] || '#000000'} onChange={(e) => setEditingApp({ ...editingApp, 'base-color': e.target.value })} className="w-12 h-12 rounded-full cursor-pointer bg-transparent border-0 mx-auto block shadow-lg" />
               </div>
               <div className="flex-1 text-center">
                 <label className="block text-[10px] font-black text-gray-500 uppercase mb-2">Accent Color</label>
-                <input type="color" value={editingApp['accent-color'] || '#ffffff'} onChange={(e) => setEditingApp({...editingApp, 'accent-color': e.target.value})} className="w-12 h-12 rounded-full cursor-pointer bg-transparent border-0 mx-auto block shadow-lg" />
+                <input type="color" value={editingApp['accent-color'] || '#ffffff'} onChange={(e) => setEditingApp({ ...editingApp, 'accent-color': e.target.value })} className="w-12 h-12 rounded-full cursor-pointer bg-transparent border-0 mx-auto block shadow-lg" />
               </div>
             </div>
           </div>
@@ -155,7 +177,7 @@ export default function App() {
   return (
     <div className="min-h-screen bg-gray-950 text-gray-100 p-4 pb-24 font-sans">
       <header className="flex justify-between items-center mb-8 max-w-md mx-auto">
-        <h1 className="text-3xl font-black italic uppercase tracking-tighter">BEE CORE</h1>
+        <h1 className="text-3xl font-black italic uppercase tracking-tighter">BEE CLOCK</h1>
         <div className={`w-3 h-3 rounded-full ${isConnected ? 'bg-green-500 shadow-[0_0_10px_#22c55e]' : 'bg-red-500'}`}></div>
       </header>
 
@@ -172,7 +194,20 @@ export default function App() {
             <section className="bg-gray-900 border border-gray-800 rounded-3xl p-6">
               <div className="flex justify-between items-center mb-5">
                 <h2 className="text-[10px] font-black text-gray-500 uppercase tracking-widest italic">Installed Apps</h2>
-                <button onClick={() => sendCommand('addApp', { id: `app-${Date.now()}`, name: "New Entry", type: "clock", enabled: true })} className="text-blue-500 text-[10px] font-black uppercase tracking-widest hover:text-blue-400">Add New</button>
+                <button onClick={() => sendCommand('addApp', {
+                  id: `app-${Date.now()}`,
+                  name: "New Entry",
+                  type: "clock",
+                  watchface: "clock",
+                  enabled: true,
+                  "base-color": "#000000",
+                  "accent-color": "#bbbbbb",
+                  "background": "",
+                  "background-opacity": 0.5,
+                  timestamp: 0,
+                  initialized: false,
+                  order: config.applications.length
+                })} className="text-blue-500 text-[10px] font-black uppercase tracking-widest hover:text-blue-400">Add New</button>
               </div>
               <div className="space-y-3">
                 {config.applications.map((app) => (
@@ -180,8 +215,8 @@ export default function App() {
                     <span className="font-black text-sm uppercase italic tracking-tight truncate mr-4">{app.name}</span>
                     <div className="flex gap-2">
                       <button onClick={() => setEditingApp(app)} className="text-[9px] bg-gray-700 px-4 py-2 rounded-lg font-black uppercase tracking-widest">Edit</button>
-                      <button onClick={() => { if(window.confirm(`Delete ${app.name}?`)) sendCommand('removeApp', { id: app.id }); }} 
-                              className="text-[9px] bg-red-900/20 text-red-500 px-4 py-2 rounded-lg font-black uppercase tracking-widest">Del</button>
+                      <button onClick={() => { if (window.confirm(`Delete ${app.name}?`)) sendCommand('removeApp', { id: app.id }); }}
+                        className="text-[9px] bg-red-900/20 text-red-500 px-4 py-2 rounded-lg font-black uppercase tracking-widest">Del</button>
                     </div>
                   </div>
                 ))}
