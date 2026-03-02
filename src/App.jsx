@@ -8,6 +8,20 @@ const epochToDateTimeLocal = (epoch) => {
 };
 const dateTimeLocalToEpoch = (dateTimeStr) => Math.floor(new Date(dateTimeStr).getTime() / 1000);
 
+const formatUptime = (seconds) => {
+  if (seconds == null) return '—';
+  const d = Math.floor(seconds / 86400);
+  const h = Math.floor((seconds % 86400) / 3600);
+  const m = Math.floor((seconds % 3600) / 60);
+  const s = Math.floor(seconds % 60);
+  const parts = [];
+  if (d > 0) parts.push(`${d}d`);
+  if (h > 0) parts.push(`${h}h`);
+  if (m > 0) parts.push(`${m}m`);
+  parts.push(`${s}s`);
+  return parts.join(' ');
+};
+
 export default function App() {
   const [config, setConfig] = useState(null);
   const [isConnected, setIsConnected] = useState(false);
@@ -15,6 +29,8 @@ export default function App() {
   const [mediaFiles, setMediaFiles] = useState([]);
   const [isUploading, setIsUploading] = useState(false);
   const [editingApp, setEditingApp] = useState(null);
+  const [editingSystemConfig, setEditingSystemConfig] = useState(null);
+  const [appStatus, setAppStatus] = useState({ version: null, uptime: null });
 
   const ws = useRef(null);
   const pendingRequests = useRef({});
@@ -38,6 +54,7 @@ export default function App() {
       // Fetch initial state
       request('getConfig', {}, (result) => updateLocalState(result));
       request('getMedia', {}, (result) => setMediaFiles(result.files || []));
+      request('getStatus', {}, (result) => setAppStatus(result));
     };
     ws.current.onmessage = (e) => {
       const data = JSON.parse(e.data);
@@ -65,6 +82,7 @@ export default function App() {
   const updateLocalState = (conf) => {
     setConfig(conf);
     if (editingApp) setEditingApp(conf.applications.find(a => a.id === editingApp.id) || null);
+    if (editingSystemConfig) setEditingSystemConfig({ ...conf['system-configuration'] });
   };
 
   /** Send a request and optionally handle the response via callback */
@@ -158,6 +176,14 @@ export default function App() {
               </select>
             </div>
 
+            <div>
+              <label className="block text-[10px] font-black text-gray-500 uppercase mb-1">Background Opacity</label>
+              <div className="flex items-center gap-3">
+                <input type="range" min="0" max="1" step="0.05" value={editingApp['background-opacity'] ?? 0.5} onChange={(e) => setEditingApp({ ...editingApp, 'background-opacity': parseFloat(e.target.value) })} className="flex-1 accent-blue-500" />
+                <span className="text-xs font-bold text-gray-400 w-8 text-right">{Math.round((editingApp['background-opacity'] ?? 0.5) * 100)}%</span>
+              </div>
+            </div>
+
             <div className="flex space-x-4 pt-2">
               <div className="flex-1 text-center">
                 <label className="block text-[10px] font-black text-gray-500 uppercase mb-2">Base Color</label>
@@ -168,6 +194,23 @@ export default function App() {
                 <input type="color" value={editingApp['accent-color'] || '#ffffff'} onChange={(e) => setEditingApp({ ...editingApp, 'accent-color': e.target.value })} className="w-12 h-12 rounded-full cursor-pointer bg-transparent border-0 mx-auto block shadow-lg" />
               </div>
             </div>
+
+            {editingApp.type === 'clock' && (
+              <div className="flex space-x-4 pt-2">
+                <div className="flex-1 text-center">
+                  <label className="block text-[10px] font-black text-gray-500 uppercase mb-2">Hour</label>
+                  <input type="color" value={editingApp['hour-color'] || '#995000'} onChange={(e) => setEditingApp({ ...editingApp, 'hour-color': e.target.value })} className="w-12 h-12 rounded-full cursor-pointer bg-transparent border-0 mx-auto block shadow-lg" />
+                </div>
+                <div className="flex-1 text-center">
+                  <label className="block text-[10px] font-black text-gray-500 uppercase mb-2">Minute</label>
+                  <input type="color" value={editingApp['minute-color'] || '#005099'} onChange={(e) => setEditingApp({ ...editingApp, 'minute-color': e.target.value })} className="w-12 h-12 rounded-full cursor-pointer bg-transparent border-0 mx-auto block shadow-lg" />
+                </div>
+                <div className="flex-1 text-center">
+                  <label className="block text-[10px] font-black text-gray-500 uppercase mb-2">Second</label>
+                  <input type="color" value={editingApp['second-color'] || '#009950'} onChange={(e) => setEditingApp({ ...editingApp, 'second-color': e.target.value })} className="w-12 h-12 rounded-full cursor-pointer bg-transparent border-0 mx-auto block shadow-lg" />
+                </div>
+              </div>
+            )}
           </div>
         </div>
       </div>
@@ -223,7 +266,7 @@ export default function App() {
               </div>
             </section>
           </>
-        ) : (
+        ) : activeTab === 'media' ? (
           <section className="bg-gray-900 border border-gray-800 rounded-3xl p-6">
             <h2 className="text-[10px] font-black text-gray-500 uppercase tracking-widest mb-4 italic">Media Library</h2>
             <label className="flex flex-col items-center justify-center w-full h-32 border-2 border-gray-800 border-dashed rounded-3xl cursor-pointer bg-gray-800/20 mb-6 hover:bg-gray-800/40 transition-all">
@@ -241,12 +284,88 @@ export default function App() {
               ))}
             </div>
           </section>
+        ) : activeTab === 'settings' ? (
+          <section className="space-y-6">
+            <div className="bg-gray-900 border border-gray-800 rounded-3xl p-6">
+              <div className="flex justify-between items-center mb-5">
+                <h2 className="text-[10px] font-black text-gray-500 uppercase tracking-widest italic">System Settings</h2>
+                <button onClick={() => { sendCommand('updateSystemConfig', editingSystemConfig); }} className="bg-blue-600 px-5 py-1 rounded text-xs font-black uppercase italic">Save</button>
+              </div>
+
+              {editingSystemConfig && (
+                <div className="space-y-6">
+                  <div>
+                    <h3 className="text-[10px] font-black text-gray-600 uppercase tracking-widest mb-3">Pendulum</h3>
+                    <div className="flex space-x-4">
+                      <div className="flex-1 text-center">
+                        <label className="block text-[10px] font-black text-gray-500 uppercase mb-2">Bob</label>
+                        <input type="color" value={editingSystemConfig['pendulum-bob-color'] || '#009950'} onChange={(e) => setEditingSystemConfig({ ...editingSystemConfig, 'pendulum-bob-color': e.target.value })} className="w-12 h-12 rounded-full cursor-pointer bg-transparent border-0 mx-auto block shadow-lg" />
+                      </div>
+                      <div className="flex-1 text-center">
+                        <label className="block text-[10px] font-black text-gray-500 uppercase mb-2">Rod</label>
+                        <input type="color" value={editingSystemConfig['pendulum-rod-color'] || '#333333'} onChange={(e) => setEditingSystemConfig({ ...editingSystemConfig, 'pendulum-rod-color': e.target.value })} className="w-12 h-12 rounded-full cursor-pointer bg-transparent border-0 mx-auto block shadow-lg" />
+                      </div>
+                      <div className="flex-1 text-center">
+                        <label className="block text-[10px] font-black text-gray-500 uppercase mb-2">Background</label>
+                        <input type="color" value={editingSystemConfig['pendulum-background-color'] || '#000000'} onChange={(e) => setEditingSystemConfig({ ...editingSystemConfig, 'pendulum-background-color': e.target.value })} className="w-12 h-12 rounded-full cursor-pointer bg-transparent border-0 mx-auto block shadow-lg" />
+                      </div>
+                    </div>
+                  </div>
+
+                  <div>
+                    <h3 className="text-[10px] font-black text-gray-600 uppercase tracking-widest mb-3">System Colors</h3>
+                    <div className="flex space-x-4">
+                      <div className="flex-1 text-center">
+                        <label className="block text-[10px] font-black text-gray-500 uppercase mb-2">Base</label>
+                        <input type="color" value={editingSystemConfig['base-color'] || '#000000'} onChange={(e) => setEditingSystemConfig({ ...editingSystemConfig, 'base-color': e.target.value })} className="w-12 h-12 rounded-full cursor-pointer bg-transparent border-0 mx-auto block shadow-lg" />
+                      </div>
+                      <div className="flex-1 text-center">
+                        <label className="block text-[10px] font-black text-gray-500 uppercase mb-2">Accent</label>
+                        <input type="color" value={editingSystemConfig['accent-color'] || '#ffffff'} onChange={(e) => setEditingSystemConfig({ ...editingSystemConfig, 'accent-color': e.target.value })} className="w-12 h-12 rounded-full cursor-pointer bg-transparent border-0 mx-auto block shadow-lg" />
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+          </section>
+        ) : (
+          <section className="space-y-6">
+            <div className="bg-gray-900 border border-gray-800 rounded-3xl p-6">
+              <h2 className="text-[10px] font-black text-gray-500 uppercase tracking-widest mb-5 italic">Device Info</h2>
+              <div className="space-y-4">
+                <div className="flex justify-between items-center py-3 border-b border-gray-800">
+                  <span className="text-[10px] font-black text-gray-500 uppercase tracking-widest">Version</span>
+                  <span className="text-sm font-bold text-gray-200">{appStatus.version || '—'}</span>
+                </div>
+                <div className="flex justify-between items-center py-3 border-b border-gray-800">
+                  <span className="text-[10px] font-black text-gray-500 uppercase tracking-widest">Uptime</span>
+                  <span className="text-sm font-bold text-gray-200">{appStatus.uptime != null ? formatUptime(appStatus.uptime) : '—'}</span>
+                </div>
+                <div className="flex justify-between items-center py-3 border-b border-gray-800">
+                  <span className="text-[10px] font-black text-gray-500 uppercase tracking-widest">Temperature</span>
+                  <span className="text-sm font-bold text-gray-200">{appStatus.temperature != null ? `${(appStatus.temperature / 1000).toFixed(1)}°C` : '—'}</span>
+                </div>
+                <div className="flex justify-between items-center py-3 border-b border-gray-800">
+                  <span className="text-[10px] font-black text-gray-500 uppercase tracking-widest">Device ID</span>
+                  <span className="text-sm font-bold text-gray-200">{config.device_id || '—'}</span>
+                </div>
+                <div className="flex justify-between items-center py-3">
+                  <span className="text-[10px] font-black text-gray-500 uppercase tracking-widest">Connection</span>
+                  <span className={`text-sm font-bold ${isConnected ? 'text-green-500' : 'text-red-500'}`}>{isConnected ? 'Connected' : 'Disconnected'}</span>
+                </div>
+              </div>
+            </div>
+            <button onClick={() => request('getStatus', {}, (result) => setAppStatus(result))} className="w-full bg-gray-900 border border-gray-800 rounded-3xl py-4 text-[10px] font-black text-gray-500 uppercase tracking-widest hover:bg-gray-800/60 transition-all">Refresh Status</button>
+          </section>
         )}
       </div>
 
       <nav className="fixed bottom-6 left-6 right-6 bg-gray-900/90 backdrop-blur-xl border border-gray-800 rounded-full p-2 flex justify-around shadow-2xl">
         <button onClick={() => setActiveTab('dashboard')} className={`flex-1 py-3 text-[10px] font-black uppercase tracking-[0.2em] transition-all rounded-full ${activeTab === 'dashboard' ? 'bg-blue-600 text-white shadow-lg' : 'text-gray-500'}`}>Control</button>
         <button onClick={() => setActiveTab('media')} className={`flex-1 py-3 text-[10px] font-black uppercase tracking-[0.2em] transition-all rounded-full ${activeTab === 'media' ? 'bg-blue-600 text-white shadow-lg' : 'text-gray-500'}`}>Library</button>
+        <button onClick={() => { setActiveTab('settings'); setEditingSystemConfig({ ...config['system-configuration'] }); }} className={`flex-1 py-3 text-[10px] font-black uppercase tracking-[0.2em] transition-all rounded-full ${activeTab === 'settings' ? 'bg-blue-600 text-white shadow-lg' : 'text-gray-500'}`}>Settings</button>
+        <button onClick={() => { setActiveTab('info'); request('getStatus', {}, (result) => setAppStatus(result)); }} className={`flex-1 py-3 text-[10px] font-black uppercase tracking-[0.2em] transition-all rounded-full ${activeTab === 'info' ? 'bg-blue-600 text-white shadow-lg' : 'text-gray-500'}`}>Info</button>
       </nav>
     </div>
   );
