@@ -149,6 +149,8 @@ export default function App() {
                   <option value="clock">Clock</option>
                   <option value="time-elapsed">Elapsed</option>
                   <option value="countdown">Countdown</option>
+                  <option value="photo-frame">Photo Frame</option>
+                  <option value="date-display">Date Display</option>
                 </select>
               </div>
               <div>
@@ -157,11 +159,13 @@ export default function App() {
                   <option value="clock">Analog</option>
                   <option value="seven-segment">Digital</option>
                   <option value="round-progress-bar">Progress</option>
+                  <option value="photo-frame">Photo Frame</option>
+                  <option value="date-display">Date Display</option>
                 </select>
               </div>
             </div>
 
-            {editingApp.type !== 'clock' && (
+            {editingApp.type !== 'clock' && editingApp.type !== 'photo-frame' && editingApp.type !== 'date-display' && (
               <div>
                 <label className="block text-[10px] font-black text-gray-500 uppercase mb-1">Target Date/Time</label>
                 <input type="datetime-local" value={epochToDateTimeLocal(editingApp.timestamp)} onChange={(e) => setEditingApp({ ...editingApp, timestamp: dateTimeLocalToEpoch(e.target.value), initialized: true })} className="w-full bg-gray-800 rounded-xl px-4 py-2 border border-gray-700 [color-scheme:dark] text-xs" />
@@ -181,6 +185,14 @@ export default function App() {
               <div className="flex items-center gap-3">
                 <input type="range" min="0" max="1" step="0.05" value={editingApp['background-opacity'] ?? 0.5} onChange={(e) => setEditingApp({ ...editingApp, 'background-opacity': parseFloat(e.target.value) })} className="flex-1 accent-blue-500" />
                 <span className="text-xs font-bold text-gray-400 w-8 text-right">{Math.round((editingApp['background-opacity'] ?? 0.5) * 100)}%</span>
+              </div>
+            </div>
+
+            <div>
+              <label className="block text-[10px] font-black text-gray-500 uppercase mb-1">Display Duration</label>
+              <div className="flex items-center gap-3">
+                <input type="range" min="3" max="60" step="1" value={editingApp['duration'] ?? 10} onChange={(e) => setEditingApp({ ...editingApp, 'duration': parseInt(e.target.value) })} className="flex-1 accent-blue-500" />
+                <span className="text-xs font-bold text-gray-400 w-8 text-right">{editingApp['duration'] ?? 10}s</span>
               </div>
             </div>
 
