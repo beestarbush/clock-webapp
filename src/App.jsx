@@ -25,12 +25,15 @@ const formatUptime = (seconds) => {
 export default function App() {
   const [config, setConfig] = useState(null);
   const [isConnected, setIsConnected] = useState(false);
-  const [activeTab, setActiveTab] = useState('dashboard');
+  const [activeTab, setActiveTab] = useState('info');
   const [mediaFiles, setMediaFiles] = useState([]);
   const [isUploading, setIsUploading] = useState(false);
   const [editingApp, setEditingApp] = useState(null);
   const [editingSystemConfig, setEditingSystemConfig] = useState(null);
-  const [appStatus, setAppStatus] = useState({ version: null, uptime: null });
+  const [editingDeviceId, setEditingDeviceId] = useState(null);
+  const [appStatus, setAppStatus] = useState({ version: null });
+  const [backendStatus, setBackendStatus] = useState({ uptime: null });
+  const [temperature, setTemperature] = useState(null);
 
   const ws = useRef(null);
   const pendingRequests = useRef({});
@@ -48,13 +51,16 @@ export default function App() {
     ws.current = new WebSocket(WS_URL);
     ws.current.onopen = () => {
       setIsConnected(true);
-      // Subscribe to topics
+      // Subscribe to topics (current state will be sent immediately)
       request('subscribe', { topic: 'configuration' });
       request('subscribe', { topic: 'media' });
+      request('subscribe', { topic: 'temperature' });
+      request('subscribe', { topic: 'backend-status' });
       // Fetch initial state
       request('getConfig', {}, (result) => updateLocalState(result));
       request('getMedia', {}, (result) => setMediaFiles(result.files || []));
       request('getStatus', {}, (result) => setAppStatus(result));
+      request('getTemperature', {}, (result) => setTemperature(result.temperature));
     };
     ws.current.onmessage = (e) => {
       const data = JSON.parse(e.data);
@@ -70,6 +76,8 @@ export default function App() {
         // Topic-based publish from server
         if (data.topic === 'configuration') updateLocalState(data.params);
         if (data.topic === 'media') setMediaFiles(data.params?.files || []);
+        if (data.topic === 'temperature') setTemperature(data.params?.temperature || null);
+        if (data.topic === 'backend-status') setBackendStatus(data.params || {});
       }
     };
     ws.current.onclose = () => {
@@ -83,6 +91,7 @@ export default function App() {
     setConfig(conf);
     if (editingApp) setEditingApp(conf.applications.find(a => a.id === editingApp.id) || null);
     if (editingSystemConfig) setEditingSystemConfig({ ...conf['system-configuration'] });
+    if (editingDeviceId !== null) setEditingDeviceId(conf.device_id || '');
   };
 
   /** Send a request and optionally handle the response via callback */
@@ -96,6 +105,40 @@ export default function App() {
 
   /** Fire-and-forget convenience — same as request without callback */
   const sendCommand = (method, params = {}) => request(method, params);
+
+  const getOrderedApplications = (applications = []) => {
+    return [...applications].sort((a, b) => {
+      const orderA = Number.isFinite(a?.order) ? a.order : Number.MAX_SAFE_INTEGER;
+      const orderB = Number.isFinite(b?.order) ? b.order : Number.MAX_SAFE_INTEGER;
+      if (orderA !== orderB) return orderA - orderB;
+      return String(a?.name || a?.id || '').localeCompare(String(b?.name || b?.id || ''));
+    });
+  };
+
+  const moveApplication = (appId, direction) => {
+    const orderedApps = getOrderedApplications(config.applications);
+    const currentIndex = orderedApps.findIndex((app) => app.id === appId);
+    if (currentIndex === -1) return;
+
+    const targetIndex = direction === 'up' ? currentIndex - 1 : currentIndex + 1;
+    if (targetIndex < 0 || targetIndex >= orderedApps.length) return;
+
+    const swapped = [...orderedApps];
+    [swapped[currentIndex], swapped[targetIndex]] = [swapped[targetIndex], swapped[currentIndex]];
+
+    const reorderedApps = swapped.map((app, index) => ({ ...app, order: index }));
+    const changedApps = reorderedApps.filter((app, index) => app.order !== orderedApps[index].order || app.id !== orderedApps[index].id);
+
+    changedApps.forEach((app) => sendCommand('updateApp', app));
+
+    setConfig((prev) => {
+      if (!prev) return prev;
+      return {
+        ...prev,
+        applications: reorderedApps
+      };
+    });
+  };
 
   const handleFileUpload = async (e) => {
     const file = e.target.files[0];
@@ -111,6 +154,8 @@ export default function App() {
   };
 
   if (!config) return <div className="min-h-screen bg-gray-950 flex items-center justify-center text-blue-500 font-black uppercase tracking-widest animate-pulse">Connecting...</div>;
+
+  const orderedApplications = getOrderedApplications(config.applications);
 
   // ==========================================
   // VIEW: FULL EDITOR (RESTORED PROPERTIES)
@@ -137,9 +182,19 @@ export default function App() {
           </div>
 
           <div className="bg-gray-900 border border-gray-800 rounded-3xl p-6 space-y-5">
-            <div>
-              <label className="block text-[10px] font-black text-gray-500 uppercase mb-1">Name</label>
-              <input type="text" value={editingApp.name} onChange={(e) => setEditingApp({ ...editingApp, name: e.target.value })} className="w-full bg-gray-800 rounded-xl px-4 py-2 border border-gray-700 outline-none focus:ring-1 ring-blue-500" />
+            <div className="flex items-center justify-between">
+              <div className="flex-1">
+                <label className="block text-[10px] font-black text-gray-500 uppercase mb-1">Name</label>
+                <input type="text" value={editingApp.name} onChange={(e) => setEditingApp({ ...editingApp, name: e.target.value })} className="w-full bg-gray-800 rounded-xl px-4 py-2 border border-gray-700 outline-none focus:ring-1 ring-blue-500" />
+              </div>
+              <div className="ml-4 pt-5">
+                <button
+                  onClick={() => setEditingApp({ ...editingApp, enabled: !editingApp.enabled })}
+                  className={`relative inline-flex h-8 w-14 items-center rounded-full transition-colors ${editingApp.enabled ? 'bg-blue-600' : 'bg-gray-700'}`}
+                >
+                  <span className={`inline-block h-6 w-6 transform rounded-full bg-white transition-transform ${editingApp.enabled ? 'translate-x-7' : 'translate-x-1'}`} />
+                </button>
+              </div>
             </div>
 
             <div className="grid grid-cols-2 gap-4">
@@ -149,8 +204,8 @@ export default function App() {
                   <option value="clock">Clock</option>
                   <option value="time-elapsed">Elapsed</option>
                   <option value="countdown">Countdown</option>
-                  <option value="photo-frame">Photo Frame</option>
-                  <option value="date-display">Date Display</option>
+                  <option value="no-operation">No Operation</option>
+                  <option value="current-date">Current Date</option>
                 </select>
               </div>
               <div>
@@ -160,12 +215,12 @@ export default function App() {
                   <option value="seven-segment">Digital</option>
                   <option value="round-progress-bar">Progress</option>
                   <option value="photo-frame">Photo Frame</option>
-                  <option value="date-display">Date Display</option>
+                  <option value="date-frame">Date Frame</option>
                 </select>
               </div>
             </div>
 
-            {editingApp.type !== 'clock' && editingApp.type !== 'photo-frame' && editingApp.type !== 'date-display' && (
+            {editingApp.type !== 'clock' && editingApp.type !== 'no-operation' && editingApp.type !== 'current-date' && editingApp.type !== 'date-display' && (
               <div>
                 <label className="block text-[10px] font-black text-gray-500 uppercase mb-1">Target Date/Time</label>
                 <input type="datetime-local" value={epochToDateTimeLocal(editingApp.timestamp)} onChange={(e) => setEditingApp({ ...editingApp, timestamp: dateTimeLocalToEpoch(e.target.value), initialized: true })} className="w-full bg-gray-800 rounded-xl px-4 py-2 border border-gray-700 [color-scheme:dark] text-xs" />
@@ -232,20 +287,13 @@ export default function App() {
   return (
     <div className="min-h-screen bg-gray-950 text-gray-100 p-4 pb-24 font-sans">
       <header className="flex justify-between items-center mb-8 max-w-md mx-auto">
-        <h1 className="text-3xl font-black italic uppercase tracking-tighter">BEE CLOCK</h1>
+        <h1 className="text-3xl font-black italic uppercase tracking-tighter">Clock gearhouse</h1>
         <div className={`w-3 h-3 rounded-full ${isConnected ? 'bg-green-500 shadow-[0_0_10px_#22c55e]' : 'bg-red-500'}`}></div>
       </header>
 
       <div className="max-w-md mx-auto space-y-6">
         {activeTab === 'dashboard' ? (
           <>
-            <section className="bg-gray-900 border border-gray-800 rounded-3xl p-6 shadow-2xl">
-              <h2 className="text-[10px] font-black text-gray-500 uppercase tracking-widest mb-4 italic">Active Display</h2>
-              <select value={config.active_app_id} onChange={(e) => sendCommand('setActiveApp', { app_id: e.target.value })} className="w-full bg-gray-800 rounded-2xl px-5 py-4 border border-gray-700 font-black text-lg italic uppercase outline-none focus:ring-2 ring-blue-500 appearance-none">
-                {config.applications.map((app) => <option key={app.id} value={app.id}>{app.name}</option>)}
-              </select>
-            </section>
-
             <section className="bg-gray-900 border border-gray-800 rounded-3xl p-6">
               <div className="flex justify-between items-center mb-5">
                 <h2 className="text-[10px] font-black text-gray-500 uppercase tracking-widest italic">Installed Apps</h2>
@@ -254,21 +302,43 @@ export default function App() {
                   name: "New Entry",
                   type: "clock",
                   watchface: "clock",
-                  enabled: true,
+                  enabled: false,
                   "base-color": "#000000",
                   "accent-color": "#bbbbbb",
                   "background": "",
                   "background-opacity": 0.5,
                   timestamp: 0,
                   initialized: false,
-                  order: config.applications.length
+                  order: orderedApplications.length
                 })} className="text-blue-500 text-[10px] font-black uppercase tracking-widest hover:text-blue-400">Add New</button>
               </div>
               <div className="space-y-3">
-                {config.applications.map((app) => (
+                {orderedApplications.map((app, index) => (
                   <div key={app.id} className="p-4 bg-gray-800/40 border border-gray-800 rounded-2xl flex items-center justify-between">
-                    <span className="font-black text-sm uppercase italic tracking-tight truncate mr-4">{app.name}</span>
-                    <div className="flex gap-2">
+                    <div className="flex items-center gap-3 flex-1 min-w-0">
+                      <button
+                        onClick={() => sendCommand('updateApp', { ...app, enabled: !app.enabled })}
+                        className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors flex-shrink-0 ${app.enabled ? 'bg-blue-600' : 'bg-gray-700'}`}
+                      >
+                        <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${app.enabled ? 'translate-x-6' : 'translate-x-1'}`} />
+                      </button>
+                      <span className={`font-black text-sm uppercase italic tracking-tight truncate ${!app.enabled ? 'text-gray-600' : ''}` }>{app.name}</span>
+                    </div>
+                    <div className="flex gap-2 flex-shrink-0">
+                      <button
+                        onClick={() => moveApplication(app.id, 'up')}
+                        disabled={index === 0}
+                        className="text-[9px] bg-gray-700 px-3 py-2 rounded-lg font-black uppercase tracking-widest disabled:opacity-30 disabled:cursor-not-allowed"
+                      >
+                        ↑
+                      </button>
+                      <button
+                        onClick={() => moveApplication(app.id, 'down')}
+                        disabled={index === orderedApplications.length - 1}
+                        className="text-[9px] bg-gray-700 px-3 py-2 rounded-lg font-black uppercase tracking-widest disabled:opacity-30 disabled:cursor-not-allowed"
+                      >
+                        ↓
+                      </button>
                       <button onClick={() => setEditingApp(app)} className="text-[9px] bg-gray-700 px-4 py-2 rounded-lg font-black uppercase tracking-widest">Edit</button>
                       <button onClick={() => { if (window.confirm(`Delete ${app.name}?`)) sendCommand('removeApp', { id: app.id }); }}
                         className="text-[9px] bg-red-900/20 text-red-500 px-4 py-2 rounded-lg font-black uppercase tracking-widest">Del</button>
@@ -301,7 +371,12 @@ export default function App() {
             <div className="bg-gray-900 border border-gray-800 rounded-3xl p-6">
               <div className="flex justify-between items-center mb-5">
                 <h2 className="text-[10px] font-black text-gray-500 uppercase tracking-widest italic">System Settings</h2>
-                <button onClick={() => { sendCommand('updateSystemConfig', editingSystemConfig); }} className="bg-blue-600 px-5 py-1 rounded text-xs font-black uppercase italic">Save</button>
+                <button onClick={() => { 
+                  sendCommand('updateSystemConfig', editingSystemConfig); 
+                  if (editingDeviceId !== null && editingDeviceId !== config.device_id) {
+                    sendCommand('setDeviceId', { device_id: editingDeviceId });
+                  }
+                }} className="bg-blue-600 px-5 py-1 rounded text-xs font-black uppercase italic">Save</button>
               </div>
 
               {editingSystemConfig && (
@@ -337,6 +412,11 @@ export default function App() {
                       </div>
                     </div>
                   </div>
+
+                  <div>
+                    <h3 className="text-[10px] font-black text-gray-600 uppercase tracking-widest mb-3">Device ID</h3>
+                    <input type="text" value={editingDeviceId || ''} onChange={(e) => setEditingDeviceId(e.target.value)} placeholder="e.g., SN-1001" className="w-full bg-gray-800 rounded-xl px-4 py-2 border border-gray-700 outline-none focus:ring-1 ring-blue-500 text-sm text-gray-200" />
+                  </div>
                 </div>
               )}
             </div>
@@ -352,11 +432,11 @@ export default function App() {
                 </div>
                 <div className="flex justify-between items-center py-3 border-b border-gray-800">
                   <span className="text-[10px] font-black text-gray-500 uppercase tracking-widest">Uptime</span>
-                  <span className="text-sm font-bold text-gray-200">{appStatus.uptime != null ? formatUptime(appStatus.uptime) : '—'}</span>
+                  <span className="text-sm font-bold text-gray-200">{backendStatus.uptime != null ? formatUptime(backendStatus.uptime) : '—'}</span>
                 </div>
                 <div className="flex justify-between items-center py-3 border-b border-gray-800">
                   <span className="text-[10px] font-black text-gray-500 uppercase tracking-widest">Temperature</span>
-                  <span className="text-sm font-bold text-gray-200">{appStatus.temperature != null ? `${(appStatus.temperature / 1000).toFixed(1)}°C` : '—'}</span>
+                  <span className="text-sm font-bold text-gray-200">{temperature != null ? `${(temperature / 1000).toFixed(1)}°C` : '—'}</span>
                 </div>
                 <div className="flex justify-between items-center py-3 border-b border-gray-800">
                   <span className="text-[10px] font-black text-gray-500 uppercase tracking-widest">Device ID</span>
@@ -368,16 +448,15 @@ export default function App() {
                 </div>
               </div>
             </div>
-            <button onClick={() => request('getStatus', {}, (result) => setAppStatus(result))} className="w-full bg-gray-900 border border-gray-800 rounded-3xl py-4 text-[10px] font-black text-gray-500 uppercase tracking-widest hover:bg-gray-800/60 transition-all">Refresh Status</button>
           </section>
         )}
       </div>
 
       <nav className="fixed bottom-6 left-6 right-6 bg-gray-900/90 backdrop-blur-xl border border-gray-800 rounded-full p-2 flex justify-around shadow-2xl">
-        <button onClick={() => setActiveTab('dashboard')} className={`flex-1 py-3 text-[10px] font-black uppercase tracking-[0.2em] transition-all rounded-full ${activeTab === 'dashboard' ? 'bg-blue-600 text-white shadow-lg' : 'text-gray-500'}`}>Control</button>
-        <button onClick={() => setActiveTab('media')} className={`flex-1 py-3 text-[10px] font-black uppercase tracking-[0.2em] transition-all rounded-full ${activeTab === 'media' ? 'bg-blue-600 text-white shadow-lg' : 'text-gray-500'}`}>Library</button>
-        <button onClick={() => { setActiveTab('settings'); setEditingSystemConfig({ ...config['system-configuration'] }); }} className={`flex-1 py-3 text-[10px] font-black uppercase tracking-[0.2em] transition-all rounded-full ${activeTab === 'settings' ? 'bg-blue-600 text-white shadow-lg' : 'text-gray-500'}`}>Settings</button>
         <button onClick={() => { setActiveTab('info'); request('getStatus', {}, (result) => setAppStatus(result)); }} className={`flex-1 py-3 text-[10px] font-black uppercase tracking-[0.2em] transition-all rounded-full ${activeTab === 'info' ? 'bg-blue-600 text-white shadow-lg' : 'text-gray-500'}`}>Info</button>
+        <button onClick={() => setActiveTab('dashboard')} className={`flex-1 py-3 text-[10px] font-black uppercase tracking-[0.2em] transition-all rounded-full ${activeTab === 'dashboard' ? 'bg-blue-600 text-white shadow-lg' : 'text-gray-500'}`}>Apps</button>
+        <button onClick={() => setActiveTab('media')} className={`flex-1 py-3 text-[10px] font-black uppercase tracking-[0.2em] transition-all rounded-full ${activeTab === 'media' ? 'bg-blue-600 text-white shadow-lg' : 'text-gray-500'}`}>Library</button>
+        <button onClick={() => { setActiveTab('settings'); setEditingSystemConfig({ ...config['system-configuration'] }); setEditingDeviceId(config.device_id || ''); }} className={`flex-1 py-3 text-[10px] font-black uppercase tracking-[0.2em] transition-all rounded-full ${activeTab === 'settings' ? 'bg-blue-600 text-white shadow-lg' : 'text-gray-500'}`}>Settings</button>
       </nav>
     </div>
   );
