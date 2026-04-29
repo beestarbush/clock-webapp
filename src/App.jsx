@@ -29,11 +29,13 @@ export default function App() {
   const [mediaFiles, setMediaFiles] = useState([]);
   const [isUploading, setIsUploading] = useState(false);
   const [editingApp, setEditingApp] = useState(null);
+  const [addingApp, setAddingApp] = useState(null);
   const [editingSystemConfig, setEditingSystemConfig] = useState(null);
   const [editingDeviceId, setEditingDeviceId] = useState(null);
   const [appStatus, setAppStatus] = useState({ version: null });
   const [backendStatus, setBackendStatus] = useState({ uptime: null });
-  const [temperature, setTemperature] = useState(null);
+  const [processorTemperature, setProcessorTemperature] = useState(null);
+  const [environment, setEnvironment] = useState(null);
 
   const ws = useRef(null);
   const pendingRequests = useRef({});
@@ -54,13 +56,14 @@ export default function App() {
       // Subscribe to topics (current state will be sent immediately)
       request('subscribe', { topic: 'configuration' });
       request('subscribe', { topic: 'media' });
-      request('subscribe', { topic: 'temperature' });
+      request('subscribe', { topic: 'processor-temperature' });
       request('subscribe', { topic: 'backend-status' });
+      request('subscribe', { topic: 'environment' });
       // Fetch initial state
       request('getConfig', {}, (result) => updateLocalState(result));
       request('getMedia', {}, (result) => setMediaFiles(result.files || []));
       request('getStatus', {}, (result) => setAppStatus(result));
-      request('getTemperature', {}, (result) => setTemperature(result.temperature));
+      request('getProcessorTemperature', {}, (result) => setProcessorTemperature(result.processor_temperature));
     };
     ws.current.onmessage = (e) => {
       const data = JSON.parse(e.data);
@@ -76,8 +79,9 @@ export default function App() {
         // Topic-based publish from server
         if (data.topic === 'configuration') updateLocalState(data.params);
         if (data.topic === 'media') setMediaFiles(data.params?.files || []);
-        if (data.topic === 'temperature') setTemperature(data.params?.temperature || null);
+        if (data.topic === 'processor-temperature') setProcessorTemperature(data.params?.processor_temperature || null);
         if (data.topic === 'backend-status') setBackendStatus(data.params || {});
+        if (data.topic === 'environment') setEnvironment(data.params || null);
       }
     };
     ws.current.onclose = () => {
@@ -164,6 +168,206 @@ export default function App() {
   const orderedApplications = getOrderedApplications(config.applications);
 
   // ==========================================
+  // VIEW: ADD NEW APP
+  // ==========================================
+  if (addingApp) {
+    return (
+      <div className="min-h-screen bg-gray-950 text-gray-100 p-4 pb-24 font-sans">
+        <header className="flex justify-between items-center mb-6 max-w-md mx-auto">
+          <button onClick={() => setAddingApp(null)} className="text-blue-500 font-black text-xs uppercase tracking-tighter">← Back</button>
+          <h1 className="text-lg font-black uppercase tracking-tighter">Add App</h1>
+          <button onClick={() => { sendCommand('addApp', addingApp); setAddingApp(null); }} className="bg-blue-600 px-5 py-1 rounded text-xs font-black uppercase italic">Add</button>
+        </header>
+
+        <div className="space-y-4 max-w-md mx-auto">
+          <div className="bg-gray-900 border border-gray-800 rounded-3xl overflow-hidden shadow-2xl">
+            <div className="h-44 bg-black flex items-center justify-center">
+              {addingApp.background ? (
+                <img src={`${API_BASE}/media/${addingApp.background}`} className="w-full h-full object-contain" alt="preview" />
+              ) : (
+                <div className="text-gray-800 font-black text-[10px] uppercase">No Asset Selected</div>
+              )}
+            </div>
+          </div>
+
+          <div className="bg-gray-900 border border-gray-800 rounded-3xl p-6 space-y-5">
+            <div className="flex items-center justify-between">
+              <div className="flex-1">
+                <label className="block text-[10px] font-black text-gray-500 uppercase mb-1">Name</label>
+                <input type="text" value={addingApp.name} onChange={(e) => setAddingApp({ ...addingApp, name: e.target.value })} className="w-full bg-gray-800 rounded-xl px-4 py-2 border border-gray-700 outline-none focus:ring-1 ring-blue-500" />
+              </div>
+              <div className="ml-4 pt-5">
+                <button
+                  onClick={() => setAddingApp({ ...addingApp, enabled: !addingApp.enabled })}
+                  className={`relative inline-flex h-8 w-14 items-center rounded-full transition-colors ${addingApp.enabled ? 'bg-blue-600' : 'bg-gray-700'}`}
+                >
+                  <span className={`inline-block h-6 w-6 transform rounded-full bg-white transition-transform ${addingApp.enabled ? 'translate-x-7' : 'translate-x-1'}`} />
+                </button>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <label className="block text-[10px] font-black text-gray-500 uppercase mb-1">Logic</label>
+                <select value={addingApp.type} onChange={(e) => setAddingApp({ ...addingApp, type: e.target.value })} className="w-full bg-gray-800 rounded-xl px-3 py-2 border border-gray-700 text-xs font-bold uppercase">
+                  <option value="clock">Clock</option>
+                  <option value="time-elapsed">Elapsed</option>
+                  <option value="countdown">Countdown</option>
+                  <option value="no-operation">No Operation</option>
+                  <option value="current-date">Current Date</option>
+                  <option value="environment">Environment</option>
+                </select>
+              </div>
+              <div>
+                <label className="block text-[10px] font-black text-gray-500 uppercase mb-1">Watchface</label>
+                <select value={addingApp.watchface} onChange={(e) => setAddingApp({ ...addingApp, watchface: e.target.value })} className="w-full bg-gray-800 rounded-xl px-3 py-2 border border-gray-700 text-xs font-bold uppercase">
+                  <option value="clock">Analog</option>
+                  <option value="seven-segment">Digital</option>
+                  <option value="round-progress-bar">Progress</option>
+                  <option value="photo-frame">Photo Frame</option>
+                  <option value="date-frame">Date Frame</option>
+                  <option value="canary">Canary</option>
+                </select>
+              </div>
+            </div>
+
+            {addingApp.type === 'environment' && (
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-[10px] font-black text-gray-500 uppercase mb-1">Good Threshold (ppm)</label>
+                  <input type="number" value={addingApp['good-threshold'] ?? 800} onChange={(e) => setAddingApp({ ...addingApp, 'good-threshold': parseInt(e.target.value) })} className="w-full bg-gray-800 rounded-xl px-3 py-2 border border-gray-700 text-xs font-bold" />
+                </div>
+                <div>
+                  <label className="block text-[10px] font-black text-gray-500 uppercase mb-1">Danger Threshold (ppm)</label>
+                  <input type="number" value={addingApp['danger-threshold'] ?? 1800} onChange={(e) => setAddingApp({ ...addingApp, 'danger-threshold': parseInt(e.target.value) })} className="w-full bg-gray-800 rounded-xl px-3 py-2 border border-gray-700 text-xs font-bold" />
+                </div>
+              </div>
+            )}
+
+            {addingApp.type !== 'clock' && addingApp.type !== 'no-operation' && addingApp.type !== 'current-date' && addingApp.type !== 'date-display' && addingApp.type !== 'environment' && (
+              <div>
+                <label className="block text-[10px] font-black text-gray-500 uppercase mb-1">Target Date/Time</label>
+                <input type="datetime-local" value={epochToDateTimeLocal(addingApp.timestamp)} onChange={(e) => setAddingApp({ ...addingApp, timestamp: dateTimeLocalToEpoch(e.target.value), initialized: true })} className="w-full bg-gray-800 rounded-xl px-4 py-2 border border-gray-700 [color-scheme:dark] text-xs" />
+              </div>
+            )}
+
+            <div>
+              <label className="block text-[10px] font-black text-gray-500 uppercase mb-1">Background Asset</label>
+              <select value={addingApp.background || ''} onChange={(e) => setAddingApp({ ...addingApp, background: e.target.value })} className="w-full bg-gray-800 rounded-xl px-4 py-2 border border-gray-700 text-xs font-bold uppercase">
+                <option value="">None</option>
+                {mediaFiles.map(f => <option key={f} value={f}>{f}</option>)}
+              </select>
+            </div>
+
+            <div>
+              <label className="block text-[10px] font-black text-gray-500 uppercase mb-1">Background Opacity</label>
+              <div className="flex items-center gap-3">
+                <input type="range" min="0" max="1" step="0.05" value={addingApp['background-opacity'] ?? 0.5} onChange={(e) => setAddingApp({ ...addingApp, 'background-opacity': parseFloat(e.target.value) })} className="flex-1 accent-blue-500" />
+                <span className="text-xs font-bold text-gray-400 w-8 text-right">{Math.round((addingApp['background-opacity'] ?? 0.5) * 100)}%</span>
+              </div>
+            </div>
+
+            <div>
+              <label className="block text-[10px] font-black text-gray-500 uppercase mb-1">Display Duration</label>
+              <div className="flex items-center gap-3">
+                <input type="range" min="3" max="60" step="1" value={addingApp['duration'] ?? 10} onChange={(e) => setAddingApp({ ...addingApp, 'duration': parseInt(e.target.value) })} className="flex-1 accent-blue-500" />
+                <span className="text-xs font-bold text-gray-400 w-8 text-right">{addingApp['duration'] ?? 10}s</span>
+              </div>
+            </div>
+
+            <div className="flex space-x-4 pt-2">
+              <div className="flex-1 text-center">
+                <label className="block text-[10px] font-black text-gray-500 uppercase mb-2">Base Color</label>
+                <input type="color" value={addingApp['base-color'] || '#000000'} onChange={(e) => setAddingApp({ ...addingApp, 'base-color': e.target.value })} className="w-12 h-12 rounded-full cursor-pointer bg-transparent border-0 mx-auto block shadow-lg" />
+              </div>
+              <div className="flex-1 text-center">
+                <label className="block text-[10px] font-black text-gray-500 uppercase mb-2">Accent Color</label>
+                <input type="color" value={addingApp['accent-color'] || '#ffffff'} onChange={(e) => setAddingApp({ ...addingApp, 'accent-color': e.target.value })} className="w-12 h-12 rounded-full cursor-pointer bg-transparent border-0 mx-auto block shadow-lg" />
+              </div>
+            </div>
+
+            {addingApp.type === 'clock' && (
+              <div className="flex space-x-4 pt-2">
+                <div className="flex-1 text-center">
+                  <label className="block text-[10px] font-black text-gray-500 uppercase mb-2">Hour</label>
+                  <input type="color" value={addingApp['hour-color'] || '#995000'} onChange={(e) => setAddingApp({ ...addingApp, 'hour-color': e.target.value })} className="w-12 h-12 rounded-full cursor-pointer bg-transparent border-0 mx-auto block shadow-lg" />
+                </div>
+                <div className="flex-1 text-center">
+                  <label className="block text-[10px] font-black text-gray-500 uppercase mb-2">Minute</label>
+                  <input type="color" value={addingApp['minute-color'] || '#005099'} onChange={(e) => setAddingApp({ ...addingApp, 'minute-color': e.target.value })} className="w-12 h-12 rounded-full cursor-pointer bg-transparent border-0 mx-auto block shadow-lg" />
+                </div>
+                <div className="flex-1 text-center">
+                  <label className="block text-[10px] font-black text-gray-500 uppercase mb-2">Second</label>
+                  <input type="color" value={addingApp['second-color'] || '#009950'} onChange={(e) => setAddingApp({ ...addingApp, 'second-color': e.target.value })} className="w-12 h-12 rounded-full cursor-pointer bg-transparent border-0 mx-auto block shadow-lg" />
+                </div>
+              </div>
+            )}
+
+            <div className="border-t border-gray-800 pt-4">
+              <h3 className="text-[10px] font-black text-gray-500 uppercase tracking-widest mb-3">Audio</h3>
+
+              {addingApp.type === 'clock' && (
+                <div className="space-y-3">
+                  <div>
+                    <label className="block text-[10px] font-black text-gray-500 uppercase mb-1">Tick Sound</label>
+                    <div className="flex gap-2">
+                      <select value={addingApp['tick-sound-file'] || ''} onChange={(e) => setAddingApp({ ...addingApp, 'tick-sound-file': e.target.value })} className="flex-1 bg-gray-800 rounded-xl px-3 py-2 border border-gray-700 text-xs">
+                        <option value="">None</option>
+                        {mediaFiles.map(f => <option key={f} value={f}>{f}</option>)}
+                      </select>
+                      {addingApp['tick-sound-file'] && (
+                        <>
+                          <button onClick={() => playSound(addingApp['tick-sound-file'], 'replace')} className="bg-blue-600 px-3 py-2 rounded-xl text-[10px] font-black uppercase">Play</button>
+                          <button onClick={stopSound} className="bg-red-600 px-3 py-2 rounded-xl text-[10px] font-black uppercase">Stop</button>
+                        </>
+                      )}
+                    </div>
+                  </div>
+                  <div>
+                    <label className="block text-[10px] font-black text-gray-500 uppercase mb-1">Hourly Chime</label>
+                    <div className="flex gap-2">
+                      <select value={addingApp['hourly-chime-sound-file'] || ''} onChange={(e) => setAddingApp({ ...addingApp, 'hourly-chime-sound-file': e.target.value })} className="flex-1 bg-gray-800 rounded-xl px-3 py-2 border border-gray-700 text-xs">
+                        <option value="">None</option>
+                        {mediaFiles.map(f => <option key={f} value={f}>{f}</option>)}
+                      </select>
+                      {addingApp['hourly-chime-sound-file'] && (
+                        <>
+                          <button onClick={() => playSound(addingApp['hourly-chime-sound-file'], 'queue')} className="bg-blue-600 px-3 py-2 rounded-xl text-[10px] font-black uppercase">Play</button>
+                          <button onClick={stopSound} className="bg-red-600 px-3 py-2 rounded-xl text-[10px] font-black uppercase">Stop</button>
+                        </>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {(addingApp.type === 'countdown' || addingApp.type === 'time-elapsed') && (
+                <div className="space-y-3">
+                  <div>
+                    <label className="block text-[10px] font-black text-gray-500 uppercase mb-1">Sound</label>
+                    <div className="flex gap-2">
+                      <select value={addingApp['sound-file'] || ''} onChange={(e) => setAddingApp({ ...addingApp, 'sound-file': e.target.value })} className="flex-1 bg-gray-800 rounded-xl px-3 py-2 border border-gray-700 text-xs">
+                        <option value="">None</option>
+                        {mediaFiles.map(f => <option key={f} value={f}>{f}</option>)}
+                      </select>
+                      {addingApp['sound-file'] && (
+                        <>
+                          <button onClick={() => playSound(addingApp['sound-file'], 'queue')} className="bg-blue-600 px-3 py-2 rounded-xl text-[10px] font-black uppercase">Play</button>
+                          <button onClick={stopSound} className="bg-red-600 px-3 py-2 rounded-xl text-[10px] font-black uppercase">Stop</button>
+                        </>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // ==========================================
   // VIEW: FULL EDITOR (RESTORED PROPERTIES)
   // ==========================================
   if (editingApp) {
@@ -212,6 +416,7 @@ export default function App() {
                   <option value="countdown">Countdown</option>
                   <option value="no-operation">No Operation</option>
                   <option value="current-date">Current Date</option>
+                  <option value="environment">Environment</option>
                 </select>
               </div>
               <div>
@@ -222,11 +427,25 @@ export default function App() {
                   <option value="round-progress-bar">Progress</option>
                   <option value="photo-frame">Photo Frame</option>
                   <option value="date-frame">Date Frame</option>
+                  <option value="canary">Canary</option>
                 </select>
               </div>
             </div>
 
-            {editingApp.type !== 'clock' && editingApp.type !== 'no-operation' && editingApp.type !== 'current-date' && editingApp.type !== 'date-display' && (
+            {editingApp.type === 'environment' && (
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-[10px] font-black text-gray-500 uppercase mb-1">Good Threshold (ppm)</label>
+                  <input type="number" value={editingApp['good-threshold'] ?? 800} onChange={(e) => setEditingApp({ ...editingApp, 'good-threshold': parseInt(e.target.value) })} className="w-full bg-gray-800 rounded-xl px-3 py-2 border border-gray-700 text-xs font-bold" />
+                </div>
+                <div>
+                  <label className="block text-[10px] font-black text-gray-500 uppercase mb-1">Danger Threshold (ppm)</label>
+                  <input type="number" value={editingApp['danger-threshold'] ?? 1800} onChange={(e) => setEditingApp({ ...editingApp, 'danger-threshold': parseInt(e.target.value) })} className="w-full bg-gray-800 rounded-xl px-3 py-2 border border-gray-700 text-xs font-bold" />
+                </div>
+              </div>
+            )}
+
+            {editingApp.type !== 'clock' && editingApp.type !== 'no-operation' && editingApp.type !== 'current-date' && editingApp.type !== 'date-display' && editingApp.type !== 'environment' && (
               <div>
                 <label className="block text-[10px] font-black text-gray-500 uppercase mb-1">Target Date/Time</label>
                 <input type="datetime-local" value={epochToDateTimeLocal(editingApp.timestamp)} onChange={(e) => setEditingApp({ ...editingApp, timestamp: dateTimeLocalToEpoch(e.target.value), initialized: true })} className="w-full bg-gray-800 rounded-xl px-4 py-2 border border-gray-700 [color-scheme:dark] text-xs" />
@@ -362,7 +581,7 @@ export default function App() {
             <section className="bg-gray-900 border border-gray-800 rounded-3xl p-6">
               <div className="flex justify-between items-center mb-5">
                 <h2 className="text-[10px] font-black text-gray-500 uppercase tracking-widest italic">Installed Apps</h2>
-                <button onClick={() => sendCommand('addApp', {
+                <button onClick={() => setAddingApp({
                   id: `app-${Date.now()}`,
                   name: "New Entry",
                   type: "clock",
@@ -506,9 +725,21 @@ export default function App() {
                   <span className="text-sm font-bold text-gray-200">{backendStatus.uptime != null ? formatUptime(backendStatus.uptime) : '—'}</span>
                 </div>
                 <div className="flex justify-between items-center py-3 border-b border-gray-800">
-                  <span className="text-[10px] font-black text-gray-500 uppercase tracking-widest">Temperature</span>
-                  <span className="text-sm font-bold text-gray-200">{temperature != null ? `${(temperature / 1000).toFixed(1)}°C` : '—'}</span>
-                </div>
+                   <span className="text-[10px] font-black text-gray-500 uppercase tracking-widest">Processor Temp</span>
+                   <span className="text-sm font-bold text-gray-200">{processorTemperature != null ? `${(processorTemperature / 1000).toFixed(1)}°C` : '—'}</span>
+                 </div>
+                 <div className="flex justify-between items-center py-3 border-b border-gray-800">
+                   <span className="text-[10px] font-black text-gray-500 uppercase tracking-widest">CO2</span>
+                   <span className="text-sm font-bold text-gray-200">{environment?.co2_parts_per_million != null ? `${environment.co2_parts_per_million} ppm` : '—'}</span>
+                 </div>
+                 <div className="flex justify-between items-center py-3 border-b border-gray-800">
+                   <span className="text-[10px] font-black text-gray-500 uppercase tracking-widest">Air Temp</span>
+                   <span className="text-sm font-bold text-gray-200">{environment?.temperature_celsius != null ? `${environment.temperature_celsius.toFixed(1)}°C` : '—'}</span>
+                 </div>
+                 <div className="flex justify-between items-center py-3 border-b border-gray-800">
+                   <span className="text-[10px] font-black text-gray-500 uppercase tracking-widest">Humidity</span>
+                   <span className="text-sm font-bold text-gray-200">{environment?.humidity_percentage != null ? `${environment.humidity_percentage.toFixed(1)}%` : '—'}</span>
+                 </div>
                 <div className="flex justify-between items-center py-3 border-b border-gray-800">
                   <span className="text-[10px] font-black text-gray-500 uppercase tracking-widest">Device ID</span>
                   <span className="text-sm font-bold text-gray-200">{config.device_id || '—'}</span>
