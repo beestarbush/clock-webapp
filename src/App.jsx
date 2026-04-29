@@ -106,6 +106,12 @@ export default function App() {
   /** Fire-and-forget convenience — same as request without callback */
   const sendCommand = (method, params = {}) => request(method, params);
 
+  /** Play an audio file from the media library */
+  const playSound = (filename, mode = 'concurrent') => request('playSound', { filename, mode });
+
+  /** Stop all audio playback */
+  const stopSound = () => request('stopSound', {});
+
   const getOrderedApplications = (applications = []) => {
     return [...applications].sort((a, b) => {
       const orderA = Number.isFinite(a?.order) ? a.order : Number.MAX_SAFE_INTEGER;
@@ -278,6 +284,65 @@ export default function App() {
                 </div>
               </div>
             )}
+
+            <div className="border-t border-gray-800 pt-4">
+              <h3 className="text-[10px] font-black text-gray-500 uppercase tracking-widest mb-3">Audio</h3>
+
+              {editingApp.type === 'clock' && (
+                <div className="space-y-3">
+                  <div>
+                    <label className="block text-[10px] font-black text-gray-500 uppercase mb-1">Tick Sound</label>
+                    <div className="flex gap-2">
+                      <select value={editingApp['tick-sound-file'] || ''} onChange={(e) => setEditingApp({ ...editingApp, 'tick-sound-file': e.target.value })} className="flex-1 bg-gray-800 rounded-xl px-3 py-2 border border-gray-700 text-xs">
+                        <option value="">None</option>
+                        {mediaFiles.map(f => <option key={f} value={f}>{f}</option>)}
+                      </select>
+                      {editingApp['tick-sound-file'] && (
+                        <>
+                          <button onClick={() => playSound(editingApp['tick-sound-file'], 'replace')} className="bg-blue-600 px-3 py-2 rounded-xl text-[10px] font-black uppercase">Play</button>
+                          <button onClick={stopSound} className="bg-red-600 px-3 py-2 rounded-xl text-[10px] font-black uppercase">Stop</button>
+                        </>
+                      )}
+                    </div>
+                  </div>
+                  <div>
+                    <label className="block text-[10px] font-black text-gray-500 uppercase mb-1">Hourly Chime</label>
+                    <div className="flex gap-2">
+                      <select value={editingApp['hourly-chime-sound-file'] || ''} onChange={(e) => setEditingApp({ ...editingApp, 'hourly-chime-sound-file': e.target.value })} className="flex-1 bg-gray-800 rounded-xl px-3 py-2 border border-gray-700 text-xs">
+                        <option value="">None</option>
+                        {mediaFiles.map(f => <option key={f} value={f}>{f}</option>)}
+                      </select>
+                      {editingApp['hourly-chime-sound-file'] && (
+                        <>
+                          <button onClick={() => playSound(editingApp['hourly-chime-sound-file'], 'queue')} className="bg-blue-600 px-3 py-2 rounded-xl text-[10px] font-black uppercase">Play</button>
+                          <button onClick={stopSound} className="bg-red-600 px-3 py-2 rounded-xl text-[10px] font-black uppercase">Stop</button>
+                        </>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {(editingApp.type === 'countdown' || editingApp.type === 'time-elapsed') && (
+                <div className="space-y-3">
+                  <div>
+                    <label className="block text-[10px] font-black text-gray-500 uppercase mb-1">Sound</label>
+                    <div className="flex gap-2">
+                      <select value={editingApp['sound-file'] || ''} onChange={(e) => setEditingApp({ ...editingApp, 'sound-file': e.target.value })} className="flex-1 bg-gray-800 rounded-xl px-3 py-2 border border-gray-700 text-xs">
+                        <option value="">None</option>
+                        {mediaFiles.map(f => <option key={f} value={f}>{f}</option>)}
+                      </select>
+                      {editingApp['sound-file'] && (
+                        <>
+                          <button onClick={() => playSound(editingApp['sound-file'], 'queue')} className="bg-blue-600 px-3 py-2 rounded-xl text-[10px] font-black uppercase">Play</button>
+                          <button onClick={stopSound} className="bg-red-600 px-3 py-2 rounded-xl text-[10px] font-black uppercase">Stop</button>
+                        </>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
           </div>
         </div>
       </div>
@@ -361,7 +426,13 @@ export default function App() {
                   <div className="aspect-video flex items-center justify-center overflow-hidden">
                     <img src={`${API_BASE}/media/${file}`} className="w-full h-full object-cover" alt="" />
                   </div>
-                  <div className="p-2 text-[8px] font-mono text-gray-600 truncate uppercase tracking-tighter">{file}</div>
+                  <div className="p-2 flex items-center justify-between">
+                    <span className="text-[8px] font-mono text-gray-600 truncate uppercase tracking-tighter flex-1">{file}</span>
+                    <div className="flex gap-1 ml-2">
+                      <button onClick={() => playSound(file, 'concurrent')} className="text-[7px] bg-blue-600 text-white px-2 py-1 rounded font-black uppercase">Play</button>
+                      <button onClick={stopSound} className="text-[7px] bg-red-600 text-white px-2 py-1 rounded font-black uppercase">Stop</button>
+                    </div>
+                  </div>
                 </div>
               ))}
             </div>
